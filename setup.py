@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-VERSION = '0.0.1'
+VERSION = '0.0.2'
 DESCRIPTION = 'IceCreamSwap Python utility package'
 LONG_DESCRIPTION = 'IceCreamSwap Python utility package'
 
