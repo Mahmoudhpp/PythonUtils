@@ -100,12 +100,14 @@ class RedisConnector(CallbackRegistry):
         data_serialized = self.serialize_data(redis_key, data)
         self.r.publish(channel=redis_key, message=data_serialized)
 
-    def subscribe(self, redis_key: str, decode: bool = False, channel: Optional[str] = None) -> SafeThread:
+    def subscribe(self, redis_key: str, decode: bool = False, channel: Optional[str] = None, thread_name: Optional[str] = None) -> SafeThread:
         thread = SafeThread(target=self._subscribe_thread, kwargs=dict(
             redis_key=redis_key,
             decode=decode,
             channel=channel
         ))
+        if thread_name:
+            thread.name = thread_name
         thread.start()
         return thread
 
