@@ -3,7 +3,7 @@ import os
 import socket
 from enum import Enum
 from typing import Union, Optional
-
+import platform
 import numpy as np
 import pandas as pd
 import pyarrow.feather as feather
@@ -44,16 +44,24 @@ class RedisConnector(CallbackRegistry):
             redis_db: int = 0,
     ):
         super().__init__()
+        if platform.system() == 'Darwin':
+            keep_alive_options = {
+                socket.TCP_KEEPALIVE: 60,
+                socket.TCP_KEEPINTVL: 5,
+                socket.TCP_KEEPCNT: 3,
+            }
+        else:
+            keep_alive_options = {
+                socket.TCP_KEEPIDLE: 60,
+                socket.TCP_KEEPINTVL: 5,
+                socket.TCP_KEEPCNT: 3,
+            }
         self.r = redis.Redis(
             host=redis_host,
             port=redis_port,
             db=redis_db,
             socket_keepalive=True,
-            socket_keepalive_options={
-                socket.TCP_KEEPALIVE: 60,
-                socket.TCP_KEEPINTVL: 5,
-                socket.TCP_KEEPCNT: 3,
-            }
+            socket_keepalive_options=keep_alive_options
         )
         self.r.ping()
 
