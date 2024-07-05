@@ -65,6 +65,8 @@ class RedisConnector(CallbackRegistry):
         )
         self.r.ping()
 
+        self.hash_data: dict[str, dict[str]] = {}
+
     def __setitem__(self, redis_key: str, data):
         if isinstance(data, AttributeDict):
             data = data.__dict__
@@ -117,14 +119,21 @@ class RedisConnector(CallbackRegistry):
             # redis hash
             key, hkey = redis_key
             if isinstance(hkey, str):
+                if key in self.hash_data:
+                    return self.hash_data[key][hkey]
                 return json.loads(self.r.hget(key, hkey))
             elif isinstance(hkey, slice):
                 assert hkey.start is None and hkey.step is None and hkey.stop is None, "only : allowed"
+                if key in self.hash_data:
+                    return self.hash_data[key]
                 data_raw = self.r.hgetall(key)
                 return {key_encoded.decode(): json.loads(value_serialized) for key_encoded, value_serialized in data_raw.items()}
             else:
+                if key in self.hash_data:
+                    data = self.hash_data[key]
+                    return {single_hkey: data[single_hkey] for single_hkey in hkey}
                 values_serialized = self.r.hmget(key, hkey)
-                return {key: json.loads(value_serialized) for key, value_serialized in zip(hkey, values_serialized)}
+                return {single_hkey: json.loads(value_serialized) for single_hkey, value_serialized in zip(hkey, values_serialized)}
 
     def publish(self, redis_key: str, data):
         data_serialized = RedisConnector.to_json(data)
@@ -156,6 +165,9 @@ class RedisConnector(CallbackRegistry):
         raise Exception("should never return")
 
     def subscribe_hash(self, redis_key: str, channel: Optional[str] = None) -> SafeThread:
+        if redis_key in self.hash_data:
+            raise ValueError(f"Already subscribed to redis hash {redis_key}")
+
         thread = SafeThread(
             target=self._subscribe_hash_thread,
             kwargs=dict(
@@ -169,10 +181,10 @@ class RedisConnector(CallbackRegistry):
 
     def _subscribe_hash_thread(self, redis_key: str, channel: Optional[str] = None):
         data_raw = self.r.hgetall(redis_key)
-        data = {key_encoded.decode(): json.loads(value_serialized) for key_encoded, value_serialized in data_raw.items()}
+        self.hash_data[redis_key] = {key_encoded.decode(): json.loads(value_serialized) for key_encoded, value_serialized in data_raw.items()}
         del data_raw
 
-        self._on_new_data(data, list(data.keys()), channel=channel)
+        self._on_new_data(self.hash_data[redis_key], list(self.hash_data[redis_key].keys()), channel=channel)
 
         pubsub = self.r.pubsub(ignore_subscribe_messages=True)
 
@@ -185,10 +197,10 @@ class RedisConnector(CallbackRegistry):
             changed_values_serialized = self.r.hmget(redis_key, changed_keys)
             for key, value_serialized in zip(changed_keys, changed_values_serialized):
                 if value_serialized is None:
-                    del data[key]
+                    del self.hash_data[redis_key][key]
                 else:
-                    data[key] = json.loads(value_serialized)
-            self._on_new_data(data, changed_keys, channel=channel)
+                    self.hash_data[redis_key][key] = json.loads(value_serialized)
+            self._on_new_data(self.hash_data[redis_key], changed_keys, channel=channel)
         raise Exception("should never return")
 
     def enable_keyspace_notifications(self):
