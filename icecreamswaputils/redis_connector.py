@@ -2,7 +2,8 @@ import json
 import os
 import socket
 from enum import Enum
-from typing import Union, Optional
+from typing import Optional
+
 import platform
 import numpy as np
 import pandas as pd
@@ -34,7 +35,6 @@ class RedisConnector(CallbackRegistry):
         "non_flashswap_pools": Serialization.JSON,
         "working:uniswap-v3": Serialization.JSON,
         "block_id:working:uniswap-v3": Serialization.JSON,
-        "tx:pending": Serialization.JSON,
     }
 
     def __init__(
@@ -69,53 +69,73 @@ class RedisConnector(CallbackRegistry):
         if isinstance(data, AttributeDict):
             data = data.__dict__
 
-        data_serialized = self.serialize_data(redis_key, data)
-
-        self.r.set(redis_key, data_serialized)
-
-    def __getitem__(self, redis_key: str):
-        data_serialized = self.r.get(redis_key)
-
-        return self.deserialize_data(redis_key, data_serialized)
-
-    def update_hash(self, redis_key: str, values: dict, upsert: bool = True):
-        values_partly_serialized: dict[str, Union[str, int, float, bytes]] = {}
-        for key, value in values.items():
-            if isinstance(value, str) or isinstance(value, int) or isinstance(value, float) or isinstance(value, bytes):
-                value_serialized = value
-            else:
-                value_serialized = json.dumps(value)
-            values_partly_serialized[key] = value_serialized
-
-        if upsert:
-            # upsert mapping
-            updates = {key: value for key, value in values_partly_serialized.items() if values[key] is not None}
-            deletes = [key for key, value in values_partly_serialized.items() if values[key] is None]
-
-            if len(updates) > 0:
-                self.r.hset(redis_key, mapping=updates)
-            if len(deletes) > 0:
-                # remove keys from mapping that have a None value
-                self.r.hdel(redis_key, *deletes)
+        if isinstance(redis_key, str):
+            data_serialized = self.serialize_data(redis_key, data)
+            self.r.set(redis_key, data_serialized)
         else:
-            # overwrite mapping in redis
-            with self.r.pipeline() as pipe:
-                pipe.delete(redis_key)
-                pipe.hset(redis_key, mapping=values_partly_serialized)
-                pipe.execute()
+            # redis hash
+            key, hkey = redis_key
+            if isinstance(hkey, str):
+                data_serialized = json.dumps(data)
+                self.r.hset(key, hkey, data_serialized)
+                updated_hashes = [hkey]
+            elif isinstance(hkey, slice):
+                mapping = {key: json.dumps(value) for key, value in data.items()}
+                # overwrite mapping in redis
+                with self.r.pipeline() as pipe:
+                    pipe.delete(key)
+                    if len(mapping) != 0:
+                        pipe.hset(key, mapping=mapping)
+                    pipe.execute()
+                updated_hashes = list(mapping.keys())
+            else:
+                assert len(hkey) == len(data)
+
+                updates: dict = {}
+                deletes: list = []
+                for redis_hash, value in zip(hkey, data):
+                    if value is None:
+                        deletes.append(redis_hash)
+                    else:
+                        updates[redis_hash] = json.dumps(value)
+
+                if len(updates) > 0:
+                    self.r.hset(key, mapping=updates)
+                if len(deletes) > 0:
+                    # remove keys from mapping that have a None value
+                    self.r.hdel(key, *deletes)
+                updated_hashes = list(hkey)
+
+            # create our own kind of keyspace notifications for individual hash keys
+            self.publish(f"hash_updates:{key}", updated_hashes)
+
+    def __getitem__(self, redis_key: str | tuple[str, str | list[str]]):
+        if isinstance(redis_key, str):
+            data_serialized = self.r.get(redis_key)
+            return self.deserialize_data(redis_key, data_serialized)
+        else:
+            # redis hash
+            key, hkey = redis_key
+            if isinstance(hkey, str):
+                return json.loads(self.r.hget(key, hkey))
+            elif isinstance(hkey, slice):
+                assert hkey.start is None and hkey.step is None and hkey.stop is None, "only : allowed"
+                data_raw = self.r.hgetall(key)
+                return {key_encoded.decode(): json.loads(value_serialized) for key_encoded, value_serialized in data_raw.items()}
+            else:
+                values_serialized = self.r.hmget(key, hkey)
+                return {key: json.loads(value_serialized) for key, value_serialized in zip(hkey, values_serialized)}
 
     def publish(self, redis_key: str, data):
-        data_serialized = self.serialize_data(redis_key, data)
+        data_serialized = RedisConnector.to_json(data)
         self.r.publish(channel=redis_key, message=data_serialized)
 
     def subscribe(self, redis_key: str, decode: bool = False, channel: Optional[str] = None, thread_name: Optional[str] = None) -> SafeThread:
-        thread = SafeThread(target=self._subscribe_thread, kwargs=dict(
+        thread = SafeThread(target=self._subscribe_thread, name=thread_name, kwargs=dict(
             redis_key=redis_key,
             decode=decode,
             channel=channel
         ))
-        if thread_name:
-            thread.name = thread_name
         thread.start()
         return thread
 
@@ -133,6 +153,42 @@ class RedisConnector(CallbackRegistry):
                 self._on_new_data(data, channel=channel)
             else:
                 self._on_new_data(message, channel=channel)
+        raise Exception("should never return")
+
+    def subscribe_hash(self, redis_key: str, channel: Optional[str] = None) -> SafeThread:
+        thread = SafeThread(
+            target=self._subscribe_hash_thread,
+            kwargs=dict(
+                redis_key=redis_key,
+                channel=channel
+            ),
+            name=f"redis_subscriber_{redis_key}"
+        )
+        thread.start()
+        return thread
+
+    def _subscribe_hash_thread(self, redis_key: str, channel: Optional[str] = None):
+        data_raw = self.r.hgetall(redis_key)
+        data = {key_encoded.decode(): json.loads(value_serialized) for key_encoded, value_serialized in data_raw.items()}
+        del data_raw
+
+        self._on_new_data(data, list(data.keys()), channel=channel)
+
+        pubsub = self.r.pubsub(ignore_subscribe_messages=True)
+
+        pubsub.subscribe(f"hash_updates:{redis_key}")
+
+        for message in pubsub.listen():
+            changed_keys: list[str] = json.loads(message["data"])
+            if len(changed_keys) == 0:
+                continue
+            changed_values_serialized = self.r.hmget(redis_key, changed_keys)
+            for key, value_serialized in zip(changed_keys, changed_values_serialized):
+                if value_serialized is None:
+                    del data[key]
+                else:
+                    data[key] = json.loads(value_serialized)
+            self._on_new_data(data, changed_keys, channel=channel)
         raise Exception("should never return")
 
     def enable_keyspace_notifications(self):
