@@ -37,4 +37,8 @@ class CallbackRegistry:
 
         end_time = time()
         if end_time - start_time > self.callback_max_s:
-            print(f"callback took to long, took {end_time - start_time}s, limit {self.callback_max_s}s")
+            message = "callback"
+            if channel is not None:
+                message += f" for channel {channel}"
+            message += f" took to long, took {end_time - start_time}s, limit {self.callback_max_s}s"
+            print(message)
