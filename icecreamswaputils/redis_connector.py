@@ -141,12 +141,16 @@ class RedisConnector(CallbackRegistry):
         data_serialized = RedisConnector.to_json(data)
         self.r.publish(channel=redis_key, message=data_serialized)
 
-    def subscribe(self, redis_key: str, decode: bool = False, channel: Optional[str] = None, thread_name: Optional[str] = None) -> SafeThread:
-        thread = SafeThread(target=self._subscribe_thread, name=thread_name, kwargs=dict(
-            redis_key=redis_key,
-            decode=decode,
-            channel=channel
-        ))
+    def subscribe(self, redis_key: str, decode: bool = False, channel: Optional[str] = None) -> SafeThread:
+        thread = SafeThread(
+            target=self._subscribe_thread,
+            kwargs=dict(
+                redis_key=redis_key,
+                decode=decode,
+                channel=channel
+            ),
+            name=f"redis_hash_subscriber_{redis_key}",
+        )
         thread.start()
         return thread
 
@@ -176,7 +180,7 @@ class RedisConnector(CallbackRegistry):
                 redis_key=redis_key,
                 channel=channel
             ),
-            name=f"redis_subscriber_{redis_key}"
+            name=f"redis_hash_subscriber_{redis_key}"
         )
         thread.start()
         return thread
