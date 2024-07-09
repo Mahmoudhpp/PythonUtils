@@ -109,7 +109,8 @@ class RedisConnector(CallbackRegistry):
                 updated_hashes = list(hkey)
 
             # create our own kind of keyspace notifications for individual hash keys
-            self.publish(f"hash_updates:{key}", updated_hashes)
+            if len(updated_hashes) > 0:
+                self.publish(f"hash_updates:{key}", updated_hashes)
 
     def __getitem__(self, redis_key: str | tuple[str, str | list[str]]):
         if isinstance(redis_key, str):
