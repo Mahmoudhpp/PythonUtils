@@ -128,13 +128,14 @@ class RedisConnector(CallbackRegistry):
                 if key in self.hash_data:
                     return self.hash_data[key]
                 data_raw = self.r.hgetall(key)
-                return {key_encoded.decode(): json.loads(value_serialized) for key_encoded, value_serialized in data_raw.items()}
+                return {idx.decode(): json.loads(value) for idx, value in data_raw.items()}
             else:
                 if key in self.hash_data:
                     data = self.hash_data[key]
-                    return {single_hkey: data[single_hkey] for single_hkey in hkey}
+                    return {single_hkey: data.get(single_hkey) for single_hkey in hkey}
                 values_serialized = self.r.hmget(key, hkey)
-                return {single_hkey: json.loads(value_serialized) for single_hkey, value_serialized in zip(hkey, values_serialized)}
+                assert len(hkey) == len(values_serialized)
+                return {idx: json.loads(value) if value is not None else None for idx, value in zip(hkey, values_serialized)}
 
     def publish(self, redis_key: str, data):
         data_serialized = RedisConnector.to_json(data)
