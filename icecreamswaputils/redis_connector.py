@@ -26,15 +26,11 @@ class Serialization(Enum):
 class RedisConnector(CallbackRegistry):
     SERIALIZATION_BY_PREFIX: dict[str, Serialization] = {
         "blocks": Serialization.JSON,
-        "pools:uniswap-v2": Serialization.FEATHER,
-        "pools:uniswap-v3": Serialization.JSON,
         "block_id:pools:uniswap-v2": Serialization.JSON,
         "block_id:pools:uniswap-v3": Serialization.JSON,
-        "block_id:fees": Serialization.JSON,
-        "fees": Serialization.FEATHER,
+        "block_id:universal_fees:uniswap_v2": Serialization.JSON,
+        "block_id:universal_fees:uniswap_v3": Serialization.JSON,
         "non_flashswap_pools": Serialization.JSON,
-        "working:uniswap-v3": Serialization.JSON,
-        "block_id:working:uniswap-v3": Serialization.JSON,
     }
 
     def __init__(
