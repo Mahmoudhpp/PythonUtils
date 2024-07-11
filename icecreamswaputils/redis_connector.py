@@ -199,7 +199,10 @@ class RedisConnector(CallbackRegistry):
             changed_values_serialized = self.r.hmget(redis_key, changed_keys)
             for key, value_serialized in zip(changed_keys, changed_values_serialized):
                 if value_serialized is None:
-                    del self.hash_data[redis_key][key]
+                    try:
+                        del self.hash_data[redis_key][key]
+                    except KeyError:
+                        print(f"RedisConnector._subscribe_hash_thread received an delete update for a non existing key [{redis_key}][{key}]")
                 else:
                     self.hash_data[redis_key][key] = json.loads(value_serialized)
             self._on_new_data(self.hash_data[redis_key], changed_keys, channel=channel)
