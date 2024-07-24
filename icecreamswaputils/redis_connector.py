@@ -170,6 +170,15 @@ class RedisConnector(CallbackRegistry):
         if redis_key in self.hash_data:
             raise ValueError(f"Already subscribed to redis hash {redis_key}")
 
+        # load initial data, afterwards delta updates keep it up to date
+        data_raw = self.r.hgetall(redis_key)
+        self.hash_data[redis_key] = {key_encoded.decode(): json.loads(value_serialized) for key_encoded, value_serialized in data_raw.items()}
+        self._on_new_data(self.hash_data[redis_key], list(self.hash_data[redis_key].keys()), channel=channel)
+
+        # updates between initial loading and starting of the delta sync are lost,
+        # if this becomes an issue, this needs to be implemented differently
+
+        # take care of the delta updates
         thread = SafeThread(
             target=self._subscribe_hash_thread,
             kwargs=dict(
@@ -182,14 +191,7 @@ class RedisConnector(CallbackRegistry):
         return thread
 
     def _subscribe_hash_thread(self, redis_key: str, channel: Optional[str] = None):
-        data_raw = self.r.hgetall(redis_key)
-        self.hash_data[redis_key] = {key_encoded.decode(): json.loads(value_serialized) for key_encoded, value_serialized in data_raw.items()}
-        del data_raw
-
-        self._on_new_data(self.hash_data[redis_key], list(self.hash_data[redis_key].keys()), channel=channel)
-
         pubsub = self.r.pubsub(ignore_subscribe_messages=True)
-
         pubsub.subscribe(f"hash_updates:{redis_key}")
 
         for message in pubsub.listen():
