@@ -116,6 +116,10 @@ class RedisConnector(CallbackRegistry):
         else:
             # redis hash
             key, hkey = redis_key
+
+            if key in self.hash_frozen and key not in self.hash_data:
+                print(f"RedisConnector subscribed to hash {key}, but no data is in cache")
+
             if isinstance(hkey, str):
                 if key in self.hash_data:
                     return self.hash_data[key][hkey]
@@ -179,7 +183,6 @@ class RedisConnector(CallbackRegistry):
         # load initial data, afterwards delta updates keep it up to date
         data_raw = self.r.hgetall(redis_key)
         self.hash_data[redis_key] = {key_encoded.decode(): json.loads(value_serialized) for key_encoded, value_serialized in data_raw.items()}
-        self._on_new_data(self.hash_data[redis_key], list(self.hash_data[redis_key].keys()), channel=channel)
 
         # take care of the delta updates
         thread = SafeThread(
@@ -196,10 +199,14 @@ class RedisConnector(CallbackRegistry):
         return thread
 
     def _subscribe_hash_thread(self, pubsub: redis.client.PubSub, redis_key: str, channel: Optional[str] = None):
+        updated_initial = False
         frozen_updates = set()
         while True:
             # if this hash is frozen, check every second if it got unfrozen. If not frozen, simply wait for next update
-            message = pubsub.get_message(timeout=1 if self.hash_frozen[redis_key] else None)
+            message = pubsub.get_message(timeout=1 if self.hash_frozen[redis_key] or not updated_initial else None)
+
+            # caching frozen state so it does not change during processing
+            frozen = self.hash_frozen[redis_key]
 
             changed_keys: list[str] = []
 
@@ -207,15 +214,22 @@ class RedisConnector(CallbackRegistry):
                 # if we got a message and not a timeout, get updates from the message
                 changed_keys += json.loads(message["data"])
 
-            if not self.hash_frozen[redis_key] and len(frozen_updates) != 0:
+            if not frozen and len(frozen_updates) != 0:
                 # flush frozen updates
                 changed_keys = list(frozen_updates | set(changed_keys))
                 frozen_updates = set()
 
+            if not updated_initial and not frozen:
+                # send initial update. If hash is frozen, send once it's unfrozen
+                if len(changed_keys) == 0:
+                    # only need to send initial update if no values have changed, else update is sent either way
+                    self._on_new_data(self.hash_data[redis_key], self.hash_data[redis_key].keys(), channel=channel)
+                updated_initial = True
+
             if len(changed_keys) == 0:
                 continue
 
-            if self.hash_frozen[redis_key]:
+            if frozen:
                 # store updates instead of actually updating things, will get updated once unfrozen
                 frozen_updates |= changed_keys
                 continue
