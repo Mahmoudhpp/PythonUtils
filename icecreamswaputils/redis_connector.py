@@ -62,6 +62,7 @@ class RedisConnector(CallbackRegistry):
         self.r.ping()
 
         self.hash_data: dict[str, dict[str]] = {}
+        self.hash_frozen: dict[str, bool] = {}
 
     def __setitem__(self, redis_key: str, data):
         if isinstance(data, AttributeDict):
@@ -166,38 +167,59 @@ class RedisConnector(CallbackRegistry):
                 self._on_new_data(message, channel=channel)
         raise Exception("should never return")
 
-    def subscribe_hash(self, redis_key: str, channel: Optional[str] = None) -> SafeThread:
-        if redis_key in self.hash_data:
+    def subscribe_hash(self, redis_key: str, channel: Optional[str] = None, start_frozen=False) -> SafeThread:
+        if redis_key in self.hash_frozen:
             raise ValueError(f"Already subscribed to redis hash {redis_key}")
+        self.hash_frozen[redis_key] = start_frozen
+
+        # subscribe already to make sure no updates are being lost during loading initial data
+        pubsub = self.r.pubsub(ignore_subscribe_messages=True)
+        pubsub.subscribe(f"hash_updates:{redis_key}")
 
         # load initial data, afterwards delta updates keep it up to date
         data_raw = self.r.hgetall(redis_key)
         self.hash_data[redis_key] = {key_encoded.decode(): json.loads(value_serialized) for key_encoded, value_serialized in data_raw.items()}
         self._on_new_data(self.hash_data[redis_key], list(self.hash_data[redis_key].keys()), channel=channel)
 
-        # updates between initial loading and starting of the delta sync are lost,
-        # if this becomes an issue, this needs to be implemented differently
-
         # take care of the delta updates
         thread = SafeThread(
             target=self._subscribe_hash_thread,
             kwargs=dict(
+                pubsub=pubsub,
                 redis_key=redis_key,
                 channel=channel
             ),
             name=f"redis_hash_subscriber_{redis_key}"
         )
         thread.start()
+
         return thread
 
-    def _subscribe_hash_thread(self, redis_key: str, channel: Optional[str] = None):
-        pubsub = self.r.pubsub(ignore_subscribe_messages=True)
-        pubsub.subscribe(f"hash_updates:{redis_key}")
+    def _subscribe_hash_thread(self, pubsub: redis.client.PubSub, redis_key: str, channel: Optional[str] = None):
+        frozen_updates = set()
+        while True:
+            # if this hash is frozen, check every second if it got unfrozen. If not frozen, simply wait for next update
+            message = pubsub.get_message(timeout=1 if self.hash_frozen[redis_key] else None)
 
-        for message in pubsub.listen():
-            changed_keys: list[str] = json.loads(message["data"])
+            changed_keys: list[str] = []
+
+            if message is not None:
+                # if we got a message and not a timeout, get updates from the message
+                changed_keys += json.loads(message["data"])
+
+            if not self.hash_frozen[redis_key] and len(frozen_updates) != 0:
+                # flush frozen updates
+                changed_keys = list(frozen_updates | set(changed_keys))
+                frozen_updates = set()
+
             if len(changed_keys) == 0:
                 continue
+
+            if self.hash_frozen[redis_key]:
+                # store updates instead of actually updating things, will get updated once unfrozen
+                frozen_updates |= changed_keys
+                continue
+
             changed_values_serialized = self.r.hmget(redis_key, changed_keys)
             for key, value_serialized in zip(changed_keys, changed_values_serialized):
                 if value_serialized is None:
@@ -209,6 +231,17 @@ class RedisConnector(CallbackRegistry):
                     self.hash_data[redis_key][key] = json.loads(value_serialized)
             self._on_new_data(self.hash_data[redis_key], changed_keys, channel=channel)
         raise Exception("should never return")
+
+    def freeze_hash(self, redis_key: str):
+        # freezing mainly is for data consistency to not propagate updates during e.g. an initial setup
+        # once unfrozen all updates that happened during the freeze are triggered
+        self.hash_frozen[redis_key] = True
+
+    def unfreeze_hash(self, redis_key: str):
+        self.hash_frozen[redis_key] = False
+
+    def is_hash_frozen(self, redis_key: str) -> bool:
+        return self.hash_frozen[redis_key]
 
     def enable_keyspace_notifications(self):
         if os.getenv("REDIS_NO_KEYSPACE_NOTIFICATIONS_OVERWRITE") is not None:

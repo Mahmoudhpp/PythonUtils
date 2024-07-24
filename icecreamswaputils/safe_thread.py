@@ -4,7 +4,7 @@ from typing import Any
 
 
 class SafeThread(Thread):
-    def __init__(self, daemon=True, target=None, log_exception=False, **kwargs):
+    def __init__(self, daemon=True, target=None, log_exception=False, name=None, **kwargs):
         self.exception = None
         self.result = None
         self.joined = False
@@ -12,7 +12,7 @@ class SafeThread(Thread):
         self.original_target = target if target is not None else self.run_safe
         self.log_exception = log_exception
 
-        super().__init__(target=self._target_wrapper, daemon=daemon, **kwargs)
+        super().__init__(target=self._target_wrapper, daemon=daemon, name=name, **kwargs)
 
     def _target_wrapper(self, *args, **kwargs):
         try:
