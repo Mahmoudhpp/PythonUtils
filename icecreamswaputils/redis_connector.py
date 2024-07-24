@@ -231,7 +231,7 @@ class RedisConnector(CallbackRegistry):
 
             if frozen:
                 # store updates instead of actually updating things, will get updated once unfrozen
-                frozen_updates |= changed_keys
+                frozen_updates |= set(changed_keys)
                 continue
 
             changed_values_serialized = self.r.hmget(redis_key, changed_keys)
