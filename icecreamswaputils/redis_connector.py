@@ -202,17 +202,27 @@ class RedisConnector(CallbackRegistry):
         updated_initial = False
         frozen_updates = set()
         while True:
+            messages = []
             # if this hash is frozen, check every second if it got unfrozen. If not frozen, simply wait for next update
             message = pubsub.get_message(timeout=1 if self.hash_frozen[redis_key] or not updated_initial else None)
+            if message is not None:
+                messages.append(message)
+                while True:
+                    # get all available messages
+                    message = pubsub.get_message()
+                    if message is None:
+                        break
+                    messages.append(message)
 
             # caching frozen state so it does not change during processing
             frozen = self.hash_frozen[redis_key]
 
             changed_keys: list[str] = []
-
-            if message is not None:
+            if len(messages) != 0:
                 # if we got a message and not a timeout, get updates from the message
-                changed_keys += json.loads(message["data"])
+                for message in messages:
+                    changed_keys += json.loads(message["data"])
+                changed_keys = list(set(changed_keys))  # deduplicate
 
             if not frozen and len(frozen_updates) != 0:
                 # flush frozen updates
@@ -240,7 +250,7 @@ class RedisConnector(CallbackRegistry):
                     try:
                         del self.hash_data[redis_key][key]
                     except KeyError:
-                        print(f"RedisConnector._subscribe_hash_thread received an delete update for a non existing key [{redis_key}][{key}]")
+                        pass
                 else:
                     self.hash_data[redis_key][key] = json.loads(value_serialized)
             self._on_new_data(self.hash_data[redis_key], changed_keys, channel=channel)
