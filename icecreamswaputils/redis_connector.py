@@ -6,10 +6,7 @@ from typing import Optional
 
 import platform
 import numpy as np
-import pandas as pd
-import pyarrow.feather as feather
 import redis
-import io
 
 from hexbytes import HexBytes
 from web3.datastructures import AttributeDict
@@ -20,19 +17,9 @@ from .callback_registry import CallbackRegistry
 
 class Serialization(Enum):
     JSON = 1
-    FEATHER = 2
 
 
 class RedisConnector(CallbackRegistry):
-    SERIALIZATION_BY_PREFIX: dict[str, Serialization] = {
-        "blocks": Serialization.JSON,
-        "block_id:pools:uniswap-v2": Serialization.JSON,
-        "block_id:pools:uniswap-v3": Serialization.JSON,
-        "block_id:universal_fees:uniswap_v2": Serialization.JSON,
-        "block_id:universal_fees:uniswap_v3": Serialization.JSON,
-        "non_flashswap_pools": Serialization.JSON,
-    }
-
     def __init__(
             self,
             redis_host: str = 'localhost',
@@ -274,17 +261,16 @@ class RedisConnector(CallbackRegistry):
 
     @staticmethod
     def get_serialization(redis_key: str) -> Serialization:
-        prefix = ":".join(redis_key.split(":")[:-1])
-        serialization = RedisConnector.SERIALIZATION_BY_PREFIX[prefix]
+        # prefix = ":".join(redis_key.split(":")[:-1])
+        # serialization = RedisConnector.SERIALIZATION_BY_PREFIX[prefix]
+        serialization = Serialization.JSON
         return serialization
 
     @staticmethod
     def serialize_data(redis_key, data) -> str:
         serialization = RedisConnector.get_serialization(redis_key=redis_key)
 
-        if serialization == Serialization.FEATHER:
-            data_serialized = RedisConnector.to_feather(data)
-        elif serialization == Serialization.JSON:
+        if serialization == Serialization.JSON:
             data_serialized = RedisConnector.to_json(data)
         else:
             raise AttributeError(f"unhandled serialization type: {serialization.name}")
@@ -295,28 +281,12 @@ class RedisConnector(CallbackRegistry):
     def deserialize_data(redis_key: str, data_serialized: bytes):
         serialization = RedisConnector.get_serialization(redis_key=redis_key)
 
-        if serialization == Serialization.FEATHER:
-            data = RedisConnector.from_feather(data_serialized)
-        elif serialization == Serialization.JSON:
+        if serialization == Serialization.JSON:
             data = RedisConnector.from_json(data_serialized)
         else:
             raise AttributeError(f"unhandled serialization type: {serialization.name}")
 
         return data
-
-    @staticmethod
-    def to_feather(data: pd.DataFrame) -> bytes:
-        # Serialize the data to a Feather buffer
-        buffer = io.BytesIO()
-        feather.write_feather(data, buffer)
-        buffer.seek(0)
-        return buffer.getvalue()
-
-    @staticmethod
-    def from_feather(data_serialized: bytes) -> pd.DataFrame:
-        buffer = io.BytesIO(data_serialized)
-        df = feather.read_feather(buffer)
-        return df
 
     @staticmethod
     def to_json(data) -> str:

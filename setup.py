@@ -1,14 +1,12 @@
 from setuptools import setup, find_packages
 
-VERSION = '0.2.0'
+VERSION = '0.2.1'
 DESCRIPTION = 'IceCreamSwap Python utility package'
 LONG_DESCRIPTION = 'IceCreamSwap Python utility package'
 
 requirements = [
-    'pandas',
     'numpy',
     'web3',
-    'pyarrow',
     'redis',
     'requests'
 ]
