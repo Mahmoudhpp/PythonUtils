@@ -64,7 +64,7 @@ class RedisConnector(CallbackRegistry):
         self.hash_data: dict[str, dict[str]] = {}
         self.hash_frozen: dict[str, bool] = {}
 
-    def __setitem__(self, redis_key: str, data):
+    def __setitem__(self, redis_key: str | tuple[str, str | slice | list[str]], data):
         if isinstance(data, AttributeDict):
             data = data.__dict__
 
@@ -109,7 +109,7 @@ class RedisConnector(CallbackRegistry):
             if len(updated_hashes) > 0:
                 self.publish(f"hash_updates:{key}", updated_hashes)
 
-    def __getitem__(self, redis_key: str | tuple[str, str | list[str]]):
+    def __getitem__(self, redis_key: str | tuple[str, str | slice | list[str]]):
         if isinstance(redis_key, str):
             data_serialized = self.r.get(redis_key)
             return self.deserialize_data(redis_key, data_serialized)
