@@ -1,6 +1,6 @@
-from random import randint
 from time import time
 from typing import Optional
+import secrets
 
 
 class CallbackRegistry:
@@ -14,7 +14,7 @@ class CallbackRegistry:
         self.callbacks: dict[Optional[str], dict[int, callable]] = dict()
 
     def register_callback(self, callback: callable, channel: Optional[str] = None) -> int:
-        callback_id = randint(0, 2**32)
+        callback_id = secrets.SystemRandom().randint(0, 2**32)
         if channel not in self.callbacks:
             self.callbacks[channel] = {}
         self.callbacks[channel][callback_id] = callback
